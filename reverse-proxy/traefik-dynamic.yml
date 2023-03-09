@@ -1,0 +1,28 @@
+# Dynamic Configuration
+
+#https://gist.github.com/pyrou/4f555cd55677331c742742ee6007a73a
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/ssl/server.crt.pem
+        keyFile: /etc/ssl/server.key.pem
+  certificates:
+    - certFile: /etc/ssl/server.crt.pem
+      keyFile: /etc/ssl/server.key.pem
+
+http:
+  routers:
+    dashboard:
+      # rule: Host(`10.10.130.10`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))
+      rule: (PathPrefix(`/api`) || PathPrefix(`/dashboard`))
+      service: api@internal
+      entrypoints:
+        - traefik
+      middlewares:
+        - auth
+  middlewares:
+    auth:
+      basicAuth:
+        users:
+          - "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/"

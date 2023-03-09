@@ -1,0 +1,150 @@
+version: '3'
+
+services:
+  # Configuration for Hub+Proxy
+  jupyterhub:
+    build:
+      context: jupyterhub # Build the container from this folder.
+      args:
+        BASE_IMAGE: jupyterhub/jupyterhub:${JUPYTERHUB_VERSION}
+    image: tlmat-unican/jupyterhub
+    container_name: jupyterhub-tlmat  # The service will use this container name.
+    restart: unless-stopped
+    volumes:                         # Give access to Docker socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./jupyterhub/jupyterhub_config.py:/srv/jupyterhub/jupyterhub_config.py:ro
+      - ./jupyterhub/userlist:/srv/jupyterhub/userlist:ro
+      # - jupyterhub_data:/srv/jupyterhub
+    ports:
+      - 9080:8000
+    environment:                     # Env variables passed to the Hub process.
+      # DOCKER_SINGLEUSER_IMAGE: jupyterhub/singleuser:3.0.0
+      DOCKER_SINGLEUSER_IMAGE: tlmat-unican/singleuser
+      # DOCKER_NETWORK_NAME: jupyter_network
+      DOCKER_NETWORK_NAME: ${COMPOSE_PROJECT_NAME}_no-internet
+      # HUB_IP: jupyterhub-tlmat
+      HUB_IP: jupyterhub-tlmat_no-internet
+      AUTH_MODE: ${AUTH_MODE}
+      LDAP_lookup_dn_search_user: ${LDAP_lookup_dn_search_user}
+      LDAP_lookup_dn_search_password: ${LDAP_lookup_dn_search_password}
+      LDAP_server_address: ${LDAP_server_address}
+      LDAP_server_port: ${LDAP_server_port}
+      LDAP_bind_dn_template: ${LDAP_bind_dn_template}
+      LTI_CLIENT_KEY: ${LTI_CLIENT_KEY}
+      LTI_SHARED_SECRET: ${LTI_SHARED_SECRET}
+      LTI_USERNAME_KEY: ${LTI_USERNAME_KEY}
+    networks:
+      default:
+      no-internet:
+          aliases:
+            - jupyterhub-tlmat_no-internet
+    labels:                          # Traefik configuration.
+      # Tell Traefik to consider (or not) the container (exposedByDefault overriden)
+      - "traefik.enable=true"
+      #- traefik.docker.network=project_jupyter_network
+      # localhost???
+      #- "traefik.http.routers.jupypterhub.rule=Host(`192.168.56.110`) || Host(`127.0.0.1`) || Host(`localhost`)"
+      # For testing purpouses (uses selfsigned certificate by Traefik)
+      - "traefik.http.routers.jupypterhub-test.rule=Host(`${HOST_INTERNAL_NAME}`) || Host(`${HOST_INTERNAL_IP}`) || Host(`${HOST_IP}`)"
+      - "traefik.http.routers.jupypterhub-test.tls=true" 
+      # For public provisioning (uses Let's Encrypt certificate)
+      - "traefik.http.routers.jupypterhub.rule=Host(`${HOST_NAME}`)" 
+      - "traefik.http.routers.jupypterhub.tls=true"
+      - "traefik.http.routers.jupypterhub.tls.certresolver=le"
+
+    logging:
+      options:
+        max-size: 50m
+
+  # Configuration for reverse proxy
+  reverse-proxy:
+    image: traefik
+    container_name: traefik-tlmat
+    restart: unless-stopped
+    depends_on:
+      - jupyterhub
+    command:
+      # - "--log.level=DEBUG"
+      # API and dashboard
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+      # Providers
+      - "--providers.docker=true"
+      - "--providers.docker.watch=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.exposedbydefault=false"
+      # Entrypoints
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.traefik.address=:8080
+      # redirection to https
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      # Let's encrypt
+      - "--certificatesresolvers.le.acme.tlschallenge=true"
+      #- "--certificatesresolvers.myresolver.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+      - "--certificatesresolvers.le.acme.email=${LE_CONTACT_EMAIL}"
+      - "--certificatesresolvers.le.acme.storage=/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # touch acme.json && chmod 600 acme.json
+      - ./reverse-proxy/acme.json:/acme.json
+    labels:
+      - "traefik.enable=true"
+      # Dashboard
+      - "traefik.http.routers.dashboard.rule=(PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      # - "traefik.http.routers.dashboard.tls=true"
+      # - "traefik.http.routers.dashboard.tls.certresolver=le"
+      - "traefik.http.routers.dashboard.entrypoints=traefik"
+      - "traefik.http.routers.dashboard.middlewares=authdashboard"
+      - "traefik.http.middlewares.authdashboard.basicauth.users=${TRAEFIX_DASHBOARD_AUTH}"
+    networks:
+      default:
+      no-internet:
+        aliases:
+          - reverse-proxy-tlmat_no-internet
+          - traefik-tlmat_no-internet
+
+  # Configuration for single-user servers
+  singleuser:
+    build: 
+      context: singleuser # Build the container from this folder.
+      args:
+        JUPYTERHUB_VERSION: ${JUPYTERHUB_VERSION}
+        BUILD_NOTEBOOK_ARGS: --log-level='INFO'
+    image: tlmat-unican/singleuser
+    container_name: singleuser-tlmat
+    # When Docker Compose starts the service, it terminates immediately. Indeed this image is meant to be loaded by the Hub, not by Compose.
+    command: "echo"
+    environment:
+      JUPYTER_ENABLE_LAB: 'yes'
+    networks: 
+      # I think it's not mandatory to put it there.
+      - no-internet
+
+# It is recommended to put all of the files used by JupyterHub into standard UNIX filesystem location
+# /srv/jupyterhub for all security and runtime files
+# /etc/jupyterhub for all configuration files
+# /var/log for log files
+#volumes:
+#  jupyterhub_data:
+#    name: jupyterhub_data
+#    driver: local
+#    driver_opts:
+#      type: 'none'
+#      o: 'bind'
+#      device: '/root/project/shared'
+
+networks:
+  default:
+    # name: jupyter_network
+  no-internet:
+    # name: jupyter_no-internet
+    internal: true
+
+

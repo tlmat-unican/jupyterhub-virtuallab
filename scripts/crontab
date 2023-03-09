@@ -1,0 +1,2 @@
+0   0 * * *  /root/project/scripts/jupyterhub-clean-disk-space.sh            # At 3am
+*/5 * * * *  /root/project/scripts/jupyterhub-system-stats.sh >> /var/log/jupyterhub-stats.csv # Every 5 min

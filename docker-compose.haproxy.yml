@@ -1,0 +1,93 @@
+version: '3'
+
+services:
+  # Configuration for Hub+Proxy
+  jupyterhub:
+    build:
+      context: jupyterhub # Build the container from this folder.
+      args:
+        BASE_IMAGE: jupyterhub/jupyterhub:${JUPYTERHUB_VERSION}
+    image: tlmat-unican/jupyterhub
+    container_name: jupyterhub-tlmat  # The service will use this container name.
+    volumes:                         # Give access to Docker socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # - jupyterhub_data:/srv/jupyterhub
+    ports:
+      - 9080:8000
+    environment:                     # Env variables passed to the Hub process.
+      DOCKER_SINGLEUSER_IMAGE: tlmat-unican/singleuser
+      # DOCKER_SINGLEUSER_IMAGE: jupyterhub/singleuser:3.0.0
+      # DOCKER_NETWORK_NAME: jupyter_network
+      # HUB_IP: jupyterhub-tlmat
+      DOCKER_NETWORK_NAME: ${COMPOSE_PROJECT_NAME}_no-internet
+      HUB_IP: jupyterhub-tlmat_no-internet
+      LDAP_lookup_dn_search_user: ${LDAP_lookup_dn_search_user}
+      LDAP_lookup_dn_search_password: ${LDAP_lookup_dn_search_password}
+      LDAP_server_address: ${LDAP_server_address}
+      LDAP_server_port: ${LDAP_server_port}
+      LDAP_bind_dn_template: ${LDAP_bind_dn_template}
+      LTI_CLIENT_KEY: ${LTI_CLIENT_KEY}
+      LTI_SHARED_SECRET: ${LTI_SHARED_SECRET}
+      LTI_USERNAME_KEY: ${LTI_USERNAME_KEY}
+    networks:
+      default:
+      no-internet:
+          aliases:
+            - jupyterhub-tlmat_no-internet
+
+  # Configuration for reverse proxy
+  reverse-proxy:
+    image: haproxy:alpine
+    container_name: haproxy-tlmat
+    depends_on:
+      - jupyterhub
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - HOST_NAME: ${HOST_NAME}
+    networks:
+      default:
+      no-internet:
+        # aliases:
+        #   - reverse-proxy-tlmat_no-internet
+        #   - traefik-tlmat_no-internet
+    volumes:
+      - ./reverse-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./reverse-proxy/ssl:/etc/ssl/letsencrypt
+
+  # Configuration for single-user servers
+  singleuser:
+    build: 
+      context: singleuser # Build the container from this folder.
+      args:
+        JUPYTERHUB_VERSION: ${JUPYTERHUB_VERSION}
+    image: tlmat-unican/singleuser
+    container_name: singleuser-tlmat
+    # When Docker Compose starts the service, it terminates immediately. Indeed this image is meant to be loaded by the Hub, not by Compose.
+    command: "echo"
+    environment:
+      JUPYTER_ENABLE_LAB: 'yes'
+    networks: # I think it's not mandatory to put it there.
+      - no-internet
+
+# It is recommended to put all of the files used by JupyterHub into standard UNIX filesystem location
+# /srv/jupyterhub for all security and runtime files
+# /etc/jupyterhub for all configuration files
+# /var/log for log files
+volumes:
+  jupyterhub_data:
+    name: jupyterhub_data
+    driver: local
+    driver_opts:
+      type: 'none'
+      o: 'bind'
+      device: '/root/project/shared'
+
+networks:
+  default:
+    name: jupyter_network
+  no-internet:
+    internal: true
+
+
